@@ -312,6 +312,13 @@ public static class SceneSetup
         // not build an APK directly.
         EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
 
+        // No Unity splash screen: an HMI should show its first real frame as
+        // soon as it can, and startup is measured to that frame. With the
+        // splash on (the default), the plugin's first event came about 2 s
+        // after Unity's "Fully drawn" on the Pixel 6a (2026-10-13).
+        PlayerSettings.SplashScreen.show = false;
+        PlayerSettings.SplashScreen.showUnityLogo = false;
+
         PlayerSettings.applicationIdentifier = "dev.yosukesakurai.vehiclehud.unitylib";
         // Unity 6's minimum supported Android API is 26 — AndroidApiLevel24
         // is obsolete as of this Editor version. vehicle-hud's own
