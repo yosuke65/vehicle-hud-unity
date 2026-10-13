@@ -1,0 +1,18 @@
+# Unity-generated folders
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+# Exported Android project (rebuilt by SceneSetup's export methods)
+/Builds/
+# IDE files Unity regenerates
+*.csproj
+*.sln
+.vs/
+.idea/
+.DS_Store
+# The native plugin is built from vehicle-hud/unity-plugin (build.sh) and
+# copied in; the .meta files stay tracked.
+/Assets/Plugins/Android/libs/**/*.so
