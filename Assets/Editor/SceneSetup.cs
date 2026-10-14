@@ -334,14 +334,34 @@ public static class SceneSetup
         // no-op, so IL2CPP output stays ARM64-only regardless. Not
         // something fixable from this project; Unity itself dropped it.
 
+        // HUD_DEV_BUILD=1: a development build that connects to the Unity
+        // Profiler, so the Profiler and Frame Debugger can attach to the phone.
+        var buildOptions = BuildOptions.None;
+        if (System.Environment.GetEnvironmentVariable("HUD_DEV_BUILD") == "1") {
+            buildOptions |= BuildOptions.Development | BuildOptions.ConnectWithProfiler;
+        }
+
+        // HUD_GFX_JOBS=1: turn on Graphics Jobs for this export only, to see
+        // which thread the plugin's render events run on. Put back afterwards.
+        bool graphicsJobs = PlayerSettings.graphicsJobs;
+        if (System.Environment.GetEnvironmentVariable("HUD_GFX_JOBS") == "1") {
+            PlayerSettings.graphicsJobs = true;
+        }
+        Debug.Log($"Export options: {buildOptions}, graphics jobs {PlayerSettings.graphicsJobs} ({PlayerSettings.graphicsJobMode})");
+
         var options = new BuildPlayerOptions {
             scenes = new[] { ScenePath },
             locationPathName = "Builds/AndroidExport",
             target = BuildTarget.Android,
-            options = BuildOptions.None,
+            options = buildOptions,
         };
 
-        var report = BuildPipeline.BuildPlayer(options);
+        UnityEditor.Build.Reporting.BuildReport report;
+        try {
+            report = BuildPipeline.BuildPlayer(options);
+        } finally {
+            PlayerSettings.graphicsJobs = graphicsJobs;
+        }
         Debug.Log("Android export build result: " + report.summary.result);
         if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded) {
             EditorApplication.Exit(1);

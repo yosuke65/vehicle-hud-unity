@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Runtime.InteropServices;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 /// <summary>
@@ -11,8 +12,9 @@ using UnityEngine.UI;
 /// on Unity's render thread:
 /// - event 2 (in Update, before the scene renders): the plugin draws the
 ///   speed dial into a RenderTexture, which a panel above the car shows.
-/// - event 1 (at the end of the frame): the plugin draws a small dial on top
-///   of Unity's frame.
+/// - event 1: the plugin draws a small dial into the camera's frame. By
+///   default it's in a CommandBuffer on the main camera, right after opaque
+///   geometry (UseCameraCommandBuffer); otherwise at the end of the frame.
 /// The needle's speed doesn't come from here: the host app pushes it straight
 /// into the plugin over JNI.
 /// </summary>
@@ -36,6 +38,18 @@ public class HudGfxBridge : MonoBehaviour
     private const int TextureEventId = 2;
     private const int TextureSize = 512;
 
+    // A cluster redraws a moving needle, so render at the display's 60 Hz.
+    // Without this Unity uses its Android default, 30 fps (measured as about
+    // 30 render events a second before 2026-10-14).
+    private const int TargetFrameRate = 60;
+
+    // true: issue the overlay event from a CommandBuffer at
+    // CameraEvent.AfterForwardOpaque, so it runs inside the camera's own
+    // render pass, before transparents and UI. false: after
+    // WaitForEndOfFrame, on top of everything (Unity's NativeRenderingPlugin
+    // sample does this).
+    private const bool UseCameraCommandBuffer = true;
+
     private IntPtr renderEvent;
     private RenderTexture dialTexture;
     private Transform panel;
@@ -43,6 +57,7 @@ public class HudGfxBridge : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Create()
     {
+        Application.targetFrameRate = TargetFrameRate;
         var go = new GameObject("HudGfxBridge");
         DontDestroyOnLoad(go);
         go.AddComponent<HudGfxBridge>();
@@ -66,6 +81,17 @@ public class HudGfxBridge : MonoBehaviour
         // A GL texture name on GLES, a VkImage* on Vulkan.
         HudGfx_SetDialTexture(dialTexture.GetNativeTexturePtr(), dialTexture.width, dialTexture.height);
         panel = CreateDialPanel(dialTexture);
+
+        var cam = Camera.main;
+        if (UseCameraCommandBuffer && cam != null)
+        {
+            // Recorded once; Unity runs it every time this camera renders.
+            var overlay = new CommandBuffer { name = "HudGfx overlay" };
+            overlay.IssuePluginEvent(renderEvent, OverlayEventId);
+            cam.AddCommandBuffer(CameraEvent.AfterForwardOpaque, overlay);
+            Debug.Log("hudgfx: overlay event in a CommandBuffer at CameraEvent.AfterForwardOpaque");
+            yield break;
+        }
 
         var endOfFrame = new WaitForEndOfFrame();
         while (true)
