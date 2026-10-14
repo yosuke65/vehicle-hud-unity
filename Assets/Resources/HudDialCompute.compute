@@ -5,7 +5,11 @@
 // Unity compiles it per graphics API (SPIR-V on Vulkan, GLSL ES 3.1 on GLES).
 #pragma kernel DrawDial
 
-RWTexture2D<float4> _Dial;
+// unorm: the texture is RGBA8 UNORM. A plain float4 compiled to a SPIR-V
+// image with format Rgba32f, which the Vulkan validation layer flagged as not
+// matching the R8G8B8A8_UNORM view ("undefined values to the whole image"),
+// even though Mali drew it correctly.
+RWTexture2D<unorm float4> _Dial;
 float _Value;   // 0..1
 float _Radius;  // dial radius as a fraction of half the texture
 
