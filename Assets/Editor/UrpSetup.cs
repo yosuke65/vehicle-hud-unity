@@ -24,6 +24,19 @@ public static class UrpSetup
         SceneSetup.ConfigureAndroidExportVulkanAndBuild();
     }
 
+    // HUD_URP_MSAA=4 (or 1, 2, 8): set the existing URP asset's MSAA and
+    // export, to test the plugin's overlay against a multisampled pass.
+    public static void SetMsaaAndExport()
+    {
+        var asset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(AssetPath);
+        int samples = int.Parse(System.Environment.GetEnvironmentVariable("HUD_URP_MSAA") ?? "4");
+        asset.msaaSampleCount = samples;
+        EditorUtility.SetDirty(asset);
+        AssetDatabase.SaveAssets();
+        Debug.Log($"UrpSetup: MSAA {asset.msaaSampleCount}");
+        SceneSetup.ConfigureAndroidExportVulkanAndBuild();
+    }
+
     public static void Configure()
     {
         if (!AssetDatabase.IsValidFolder(Dir)) AssetDatabase.CreateFolder("Assets", "Settings");

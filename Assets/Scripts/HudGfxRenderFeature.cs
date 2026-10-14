@@ -22,6 +22,7 @@ public class HudGfxRenderFeature : ScriptableRendererFeature
         {
             public IntPtr renderEvent;
             public TextureHandle target;
+            public int samples;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -31,12 +32,16 @@ public class HudGfxRenderFeature : ScriptableRendererFeature
             {
                 data.renderEvent = HudGfxBridge.RenderEventFunc;
                 data.target = resources.activeColorTexture;
+                // With MSAA on, URP's color target is multisampled, and the
+                // plugin's pipeline has to use the same sample count.
+                data.samples = Math.Max(1, (int)renderGraph.GetTextureDesc(data.target).msaaSamples);
                 builder.UseTexture(data.target, AccessFlags.ReadWrite);
                 // Render Graph culls passes whose output nobody reads; this
                 // one only has a side effect in native code.
                 builder.AllowPassCulling(false);
                 builder.SetRenderFunc((PassData d, UnsafeGraphContext context) =>
                 {
+                    HudGfxBridge.SetOverlaySamples(d.samples);
                     CommandBuffer cmd = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
                     cmd.SetRenderTarget(d.target);
                     cmd.IssuePluginEvent(d.renderEvent, OverlayEventId);

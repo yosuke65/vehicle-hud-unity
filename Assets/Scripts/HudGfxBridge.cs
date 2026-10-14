@@ -50,6 +50,9 @@ public class HudGfxBridge : MonoBehaviour
 
     [DllImport("hudgfx")]
     private static extern void HudGfx_SetOverlayTargetFlip(float flip);
+
+    [DllImport("hudgfx")]
+    private static extern void HudGfx_SetOverlaySamples(int samples);
 #endif
 
     private const int OverlayEventId = 1;
@@ -81,6 +84,15 @@ public class HudGfxBridge : MonoBehaviour
     // For HudGfxRenderFeature: under URP the overlay event comes from a Render
     // Graph pass, which needs the plugin's event function.
     public static IntPtr RenderEventFunc { get; private set; }
+
+    // The overlay target's MSAA sample count, so the plugin builds its
+    // Vulkan pipeline to match the render pass it draws in.
+    public static void SetOverlaySamples(int samples)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        HudGfx_SetOverlaySamples(samples);
+#endif
+    }
     private RenderTexture dialTexture;
     private Transform panels;
     private Texture2D externalTexture;
