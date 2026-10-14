@@ -1,0 +1,57 @@
+// The speed dial as a Unity ComputeShader (HLSL), dispatched from C# with
+// ComputeShader.Dispatch. Same layout and colors as the plugin's
+// shaders/dial.comp and dial_body.glsl: 7 ticks over 270 degrees, a tapered
+// needle, a square hub, drawn as distance fields with a one-pixel soft edge.
+// Unity compiles it per graphics API (SPIR-V on Vulkan, GLSL ES 3.1 on GLES).
+#pragma kernel DrawDial
+
+RWTexture2D<float4> _Dial;
+float _Value;   // 0..1
+float _Radius;  // dial radius as a fraction of half the texture
+
+static const int kTicks = 7;
+static const float kStartAngle = 3.92699;  // 225 degrees: lower left
+static const float kSweep = 4.71239;       // 270 degrees, clockwise
+static const float3 kTickColor = float3(0.85, 0.88, 0.92);
+static const float3 kNeedleColor = float3(1.0, 0.62, 0.18);
+static const float3 kBackground = float3(0.06, 0.08, 0.10);
+
+// Distance to a segment from a to b whose half-width goes from wa to wb.
+float TaperedSegment(float2 p, float2 a, float2 b, float wa, float wb)
+{
+    float2 ab = b - a;
+    float t = saturate(dot(p - a, ab) / dot(ab, ab));
+    return length(p - (a + ab * t)) - lerp(wa, wb, t);
+}
+
+[numthreads(8, 8, 1)]
+void DrawDial(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    _Dial.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+
+    // Unity's texture row 0 is the bottom row when sampled, so y is already up.
+    float2 uv = (float2(id.xy) + 0.5) / float2(width, height) * 2.0 - 1.0;
+    float2 p = uv / _Radius;
+    float pixel = 2.0 / (height * _Radius);
+
+    float3 color = kBackground;
+    float tickDist = 1e6;
+    for (int i = 0; i < kTicks; ++i)
+    {
+        float a = kStartAngle - kSweep * i / (kTicks - 1.0);
+        float2 dir = float2(cos(a), sin(a));
+        tickDist = min(tickDist, TaperedSegment(p, dir * 0.78, dir * 0.95, 0.025, 0.025));
+    }
+    color = lerp(kTickColor, color, smoothstep(-pixel, pixel, tickDist));
+
+    float n = kStartAngle - kSweep * saturate(_Value);
+    float needleDist = TaperedSegment(p, float2(0, 0), float2(cos(n), sin(n)) * 0.88, 0.045, 0.0);
+    color = lerp(kNeedleColor, color, smoothstep(-pixel, pixel, needleDist));
+
+    float2 q = abs(p) - 0.06;
+    color = lerp(kTickColor, color, smoothstep(-pixel, pixel, max(q.x, q.y)));
+
+    _Dial[id.xy] = float4(color, 1.0);
+}

@@ -15,6 +15,12 @@ using UnityEngine.UI;
 /// - event 1: the plugin draws a small dial into the camera's frame. By
 ///   default it's in a CommandBuffer on the main camera, right after opaque
 ///   geometry (UseCameraCommandBuffer); otherwise at the end of the frame.
+/// - events 3 and 4: the plugin creates its own texture (event 3), C# wraps
+///   it with Texture2D.CreateExternalTexture, and the plugin draws into it
+///   every frame (event 4). Shown on the left panel.
+/// Also a dial drawn by a Unity ComputeShader (Resources/HudDialCompute),
+/// dispatched from C# each frame, on the right panel. The middle panel is
+/// the plugin drawing into a Unity RenderTexture (event 2).
 /// The needle's speed doesn't come from here: the host app pushes it straight
 /// into the plugin over JNI.
 /// </summary>
@@ -32,11 +38,28 @@ public class HudGfxBridge : MonoBehaviour
 
     [DllImport("hudgfx")]
     private static extern void HudGfx_SetDialTexture(IntPtr texture, int width, int height);
+
+    [DllImport("hudgfx")]
+    private static extern IntPtr HudGfx_GetExternalTexture();
+
+    [DllImport("hudgfx")]
+    private static extern void HudGfx_SetExternalTexture(IntPtr texture);
+
+    [DllImport("hudgfx")]
+    private static extern float HudGfx_GetSpeedKph();
 #endif
 
     private const int OverlayEventId = 1;
     private const int TextureEventId = 2;
     private const int TextureSize = 512;
+    private const int CreateExternalEventId = 3;
+    private const int ExternalEventId = 4;
+    private const int ExternalSize = 256;  // kExternalSize in hudgfx.cpp
+    private const int ComputeSize = 256;
+    private const float MaxSpeedKph = 180f;  // same full scale as the plugin
+    private const float NeedleTauSeconds = 0.12f;
+    private const float PanelSize = 0.6f;
+    private const float PanelSpacing = 0.7f;
 
     // A cluster redraws a moving needle, so render at the display's 60 Hz.
     // Without this Unity uses its Android default, 30 fps (measured as about
@@ -52,7 +75,12 @@ public class HudGfxBridge : MonoBehaviour
 
     private IntPtr renderEvent;
     private RenderTexture dialTexture;
-    private Transform panel;
+    private Transform panels;
+    private Texture2D externalTexture;
+    private ComputeShader dialCompute;
+    private int dialKernel;
+    private RenderTexture computeTexture;
+    private float computeValue;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Create()
@@ -80,7 +108,43 @@ public class HudGfxBridge : MonoBehaviour
         dialTexture.Create();
         // A GL texture name on GLES, a VkImage* on Vulkan.
         HudGfx_SetDialTexture(dialTexture.GetNativeTexturePtr(), dialTexture.width, dialTexture.height);
-        panel = CreateDialPanel(dialTexture);
+        panels = CreatePanelRoot();
+        CreateDialPanel(dialTexture, panels, 0f);
+
+        // Unity's own compute path: the same dial from an HLSL ComputeShader.
+        dialCompute = Resources.Load<ComputeShader>("HudDialCompute");
+        if (dialCompute != null && SystemInfo.supportsComputeShaders)
+        {
+            dialKernel = dialCompute.FindKernel("DrawDial");
+            computeTexture = new RenderTexture(ComputeSize, ComputeSize, 0, RenderTextureFormat.ARGB32)
+            {
+                name = "HudDialCompute", enableRandomWrite = true,
+            };
+            computeTexture.Create();
+            CreateDialPanel(computeTexture, panels, PanelSpacing);
+            Debug.Log($"hudgfx: Unity ComputeShader dial, kernel {dialKernel}, {ComputeSize}x{ComputeSize}");
+        }
+
+        // The plugin's own texture: created on the render thread by event 3,
+        // then wrapped. Wait a few frames for it.
+        GL.IssuePluginEvent(renderEvent, CreateExternalEventId);
+        for (int i = 0; i < 30 && HudGfx_GetExternalTexture() == IntPtr.Zero; i++) yield return null;
+        IntPtr native = HudGfx_GetExternalTexture();
+        if (native != IntPtr.Zero)
+        {
+            // A VkImage* on Vulkan, a GL texture name on GLES. RGBA8 UNORM,
+            // no mips; "linear" because the data isn't sRGB-encoded.
+            externalTexture = Texture2D.CreateExternalTexture(ExternalSize, ExternalSize, TextureFormat.RGBA32,
+                false, true, native);
+            externalTexture.name = "HudGfxExternal";
+            HudGfx_SetExternalTexture(externalTexture.GetNativeTexturePtr());
+            CreateDialPanel(externalTexture, panels, -PanelSpacing);
+            Debug.Log($"hudgfx: wrapped the plugin's texture {native} with CreateExternalTexture, Unity pointer {externalTexture.GetNativeTexturePtr()}");
+        }
+        else
+        {
+            Debug.Log("hudgfx: the plugin's external texture didn't appear");
+        }
 
         var cam = Camera.main;
         if (UseCameraCommandBuffer && cam != null)
@@ -112,6 +176,18 @@ public class HudGfxBridge : MonoBehaviour
         // Queued before this frame's cameras render, so the panel shows this
         // frame's dial.
         GL.IssuePluginEvent(renderEvent, TextureEventId);
+        if (externalTexture != null) GL.IssuePluginEvent(renderEvent, ExternalEventId);
+
+        if (computeTexture != null)
+        {
+            // Eased toward the latest speed, like the plugin's needle.
+            float target = Mathf.Clamp01(HudGfx_GetSpeedKph() / MaxSpeedKph);
+            computeValue += (target - computeValue) * (1f - Mathf.Exp(-Time.deltaTime / NeedleTauSeconds));
+            dialCompute.SetFloat("_Value", computeValue);
+            dialCompute.SetFloat("_Radius", 0.9f);
+            dialCompute.SetTexture(dialKernel, "_Dial", computeTexture);
+            dialCompute.Dispatch(dialKernel, (ComputeSize + 7) / 8, (ComputeSize + 7) / 8, 1);
+        }
 #endif
     }
 
@@ -119,23 +195,32 @@ public class HudGfxBridge : MonoBehaviour
     {
         // Turn the panel toward the orbiting camera so the dial stays readable.
         var cam = Camera.main;
-        if (panel == null || cam == null) return;
-        panel.rotation = Quaternion.LookRotation(panel.position - cam.transform.position, Vector3.up);
+        if (panels == null || cam == null) return;
+        panels.rotation = Quaternion.LookRotation(panels.position - cam.transform.position, Vector3.up);
     }
 
-    // A world-space canvas floating above the car, showing the plugin's
-    // texture with a RawImage (UI/Default shader, always in the build).
-    private static Transform CreateDialPanel(Texture texture)
+    // Panels float above the car and turn together toward the camera.
+    private static Transform CreatePanelRoot()
     {
         var car = GameObject.Find("CarPivot");
-        var canvasObject = new GameObject("HudGfxDialPanel");
+        var root = new GameObject("HudGfxPanels").transform;
+        root.position = (car != null ? car.transform.position : Vector3.zero) + new Vector3(0f, 1.75f, 0f);
+        return root;
+    }
+
+    // A world-space canvas showing one texture with a RawImage (UI/Default
+    // shader, always in the build), placed along the root's x axis.
+    private static void CreateDialPanel(Texture texture, Transform root, float x)
+    {
+        var canvasObject = new GameObject("HudGfxDialPanel " + texture.name);
+        canvasObject.transform.SetParent(root, false);
         var canvas = canvasObject.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.WorldSpace;
         canvas.worldCamera = Camera.main;
         var rect = canvasObject.GetComponent<RectTransform>();
         rect.sizeDelta = new Vector2(TextureSize, TextureSize);
-        rect.localScale = Vector3.one * (0.9f / TextureSize);
-        rect.position = (car != null ? car.transform.position : Vector3.zero) + new Vector3(0f, 1.75f, 0f);
+        rect.localScale = Vector3.one * (PanelSize / TextureSize);
+        rect.localPosition = new Vector3(x, 0f, 0f);
 
         var imageObject = new GameObject("Dial");
         imageObject.transform.SetParent(canvasObject.transform, false);
@@ -146,6 +231,5 @@ public class HudGfxBridge : MonoBehaviour
         imageRect.anchorMax = Vector2.one;
         imageRect.offsetMin = Vector2.zero;
         imageRect.offsetMax = Vector2.zero;
-        return canvasObject.transform;
     }
 }
