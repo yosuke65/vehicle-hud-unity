@@ -20,7 +20,7 @@ public static class SceneSetup
 
         // Same green used throughout the native vehicle-hud HUD/needle,
         // for visual consistency between the two rendering paths.
-        var material = new Material(Shader.Find("Standard"));
+        var material = new Material(LitShader());
         material.color = new Color(0.20f, 0.85f, 0.55f);
         cube.GetComponent<Renderer>().sharedMaterial = material;
 
@@ -47,6 +47,15 @@ public static class SceneSetup
         Debug.Log("SceneSetup.BuildScene complete: " + ScenePath);
     }
 
+    // Built-in Standard, or URP Lit once UrpSetup has switched the project
+    // to URP (Standard renders magenta under URP).
+    private static Shader LitShader()
+    {
+        return UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline != null
+            ? Shader.Find("Universal Render Pipeline/Lit")
+            : Shader.Find("Standard");
+    }
+
     public static void BuildCockpitScene()
     {
         EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -58,13 +67,13 @@ public static class SceneSetup
         var carRoot = new GameObject("Car");
         carRoot.transform.SetParent(carPivot.transform, false);
 
-        var bodyMat = new Material(Shader.Find("Standard"));
+        var bodyMat = new Material(LitShader());
         bodyMat.color = new Color(0.15f, 0.18f, 0.22f);
-        var cabinMat = new Material(Shader.Find("Standard"));
+        var cabinMat = new Material(LitShader());
         cabinMat.color = new Color(0.12f, 0.14f, 0.16f);
-        var wheelMat = new Material(Shader.Find("Standard"));
+        var wheelMat = new Material(LitShader());
         wheelMat.color = new Color(0.08f, 0.08f, 0.08f);
-        var glassMat = new Material(Shader.Find("Standard"));
+        var glassMat = new Material(LitShader());
         glassMat.color = new Color(0.35f, 0.55f, 0.75f, 0.6f);
         glassMat.SetFloat("_Mode", 3f); // transparent
 

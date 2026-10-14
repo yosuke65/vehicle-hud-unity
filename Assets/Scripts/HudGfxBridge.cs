@@ -47,6 +47,9 @@ public class HudGfxBridge : MonoBehaviour
 
     [DllImport("hudgfx")]
     private static extern float HudGfx_GetSpeedKph();
+
+    [DllImport("hudgfx")]
+    private static extern void HudGfx_SetOverlayTargetFlip(float flip);
 #endif
 
     private const int OverlayEventId = 1;
@@ -74,6 +77,10 @@ public class HudGfxBridge : MonoBehaviour
     private const bool UseCameraCommandBuffer = true;
 
     private IntPtr renderEvent;
+
+    // For HudGfxRenderFeature: under URP the overlay event comes from a Render
+    // Graph pass, which needs the plugin's event function.
+    public static IntPtr RenderEventFunc { get; private set; }
     private RenderTexture dialTexture;
     private Transform panels;
     private Texture2D externalTexture;
@@ -96,6 +103,7 @@ public class HudGfxBridge : MonoBehaviour
 #if UNITY_ANDROID && !UNITY_EDITOR
         Debug.Log($"hudgfx: Unity main thread {HudGfx_CurrentThreadId()}, graphics API {SystemInfo.graphicsDeviceType}");
         renderEvent = HudGfx_GetRenderEventFunc();
+        RenderEventFunc = renderEvent;
 
         dialTexture = new RenderTexture(TextureSize, TextureSize, 0, RenderTextureFormat.ARGB32);
         dialTexture.name = "HudGfxDial";
@@ -144,6 +152,18 @@ public class HudGfxBridge : MonoBehaviour
         else
         {
             Debug.Log("hudgfx: the plugin's external texture didn't appear");
+        }
+
+        if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null)
+        {
+            // URP: Camera.AddCommandBuffer doesn't run there; HudGfxRenderFeature
+            // issues the overlay event from its Render Graph pass instead.
+            // That pass draws into URP's intermediate color texture, and on
+            // APIs where texture UVs start at the top (Vulkan) URP flips it
+            // when it blits to the screen, so the overlay is drawn flipped.
+            HudGfx_SetOverlayTargetFlip(SystemInfo.graphicsUVStartsAtTop ? -1f : 1f);
+            Debug.Log("hudgfx: overlay event from HudGfxRenderFeature (URP Render Graph, after opaques)");
+            yield break;
         }
 
         var cam = Camera.main;
